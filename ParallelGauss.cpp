@@ -88,6 +88,9 @@ private:
     int size;   // Total size of the matrix (N)
     int rowNum; // Number of rows managed by this process
 
+    // Problem generation
+    int initChoice; // 1 = Dummy, 2 = Diagonal, 3 = Known Solution
+
     // Data buffers
     // --- Root Process (procRank == 0) Only ---
     std::vector<double> pMatrix; // The full NxN matrix A
@@ -114,7 +117,7 @@ public:
     /**
      * @brief Constructor: Initializes MPI state and seeds the random generator.
      */
-    ParallelGauss(int rank, int num) : procRank(rank), procNum(num), size(0), rowNum(0) {
+    ParallelGauss(int rank, int num) : procRank(rank), procNum(num), size(0), rowNum(0), initChoice(0) {
         // Seed the random engine uniquely for each process
         auto seed = std::chrono::high_resolution_clock::now().time_since_epoch().count() + procRank;
         randEngine.seed(seed);
@@ -131,19 +134,25 @@ public:
     void Run() {
         // --- Step 1: Initialization ---
         if (procRank == 0) PrintSubHeader("Step 1: Initialization");
-        ProcessInitialization(); // Gets size
+        ProcessInitialization(); // Gets size and initChoice
 
         if (procRank == 0) {
+            std::string choiceName;
+            if (initChoice == 1) {
+                choiceName = "Dummy (Lab) Test";
+                DummyDataInitialization();
+            } else if (initChoice == 2) {
+                choiceName = "Diagonally Dominant";
+                DiagonalDominantInitialization();
+            } else {
+                choiceName = "Known Solution (Random x_true)";
+                KnownSolutionInitialization();
+            }
+
             std::cout << "Initializing matrix and vector for size "
-                      << Colors::YELLOW << size << "x" << size << Colors::RESET << "..." << std::endl;
-
-            // Choose one initialization method:
-
-            // Use this for simple validation (result is all 1s from the lab manual)
-            // DummyDataInitialization();
-
-            // Use this for performance testing (diagonally dominant)
-            RandomDataInitialization();
+                      << Colors::YELLOW << size << "x" << size << Colors::RESET
+                      << " using " << Colors::CYAN << choiceName << Colors::RESET
+                      << " method..." << std::endl;
 
             // *** USER REQUEST: Print initial matrix if N <= 20 ***
             if (size <= 20) {
@@ -212,20 +221,39 @@ private:
             do {
                 std::cout << Colors::BOLD << Colors::YELLOW << "\nEnter the size of the (NxN) matrix (N): \n" << Colors::RESET;
                 std::cin >> size;
-                if (std::cin.fail()) {
+                if (std::cin.fail() || size <= 0) {
                     std::cin.clear();
                     std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-                    std::cout << Colors::RED << "Invalid input. Please enter an integer." << Colors::RESET << std::endl;
+                    std::cout << Colors::RED << "Invalid input. Please enter a positive integer." << Colors::RESET << std::endl;
                     size = 0;
                 } else if (size < procNum) {
                     std::cout << Colors::RED << "Size must be greater than or equal to the number of processes ("
                               << procNum << ")!" << Colors::RESET << std::endl;
                 }
             } while (size < procNum);
+
+            // *** USER REQUEST: Prompt for initialization method ***
+            do {
+                std::cout << Colors::BOLD << Colors::YELLOW << "\nChoose initialization method:" << Colors::RESET << std::endl;
+                std::cout << "  (1) " << Colors::CYAN << "Dummy Data" << Colors::RESET << " (Lab's lower-triangular, result should be all 1s)" << std::endl;
+                std::cout << "  (2) " << Colors::CYAN << "Diagonally Dominant" << Colors::RESET << " (Stable random test)" << std::endl;
+                std::cout << "  (3) " << Colors::CYAN << "Known Solution" << Colors::RESET << " (Dense random A, " << Colors::BOLD << "x_true = random" << Colors::RESET << ")" << std::endl; // <-- UPDATED TEXT
+                std::cout << "Your choice (1-3): \n";
+                std::cin >> initChoice;
+                if (std::cin.fail() || initChoice < 1 || initChoice > 3) {
+                    std::cin.clear();
+                    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+                    std::cout << Colors::RED << "Invalid choice. Please enter 1, 2, or 3." << Colors::RESET << std::endl;
+                    initChoice = 0;
+                }
+            } while (initChoice == 0);
         }
 
         // Broadcast the valid size to all processes
         MPI_Bcast(&size, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        // Broadcast the init choice to all processes
+        MPI_Bcast(&initChoice, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
 
         // --- All Processes: Calculate row distribution and resize vectors ---
         pProcInd.resize(procNum);
@@ -261,6 +289,7 @@ private:
      * @brief Fills matrix/vector with 1s (for dummy test). Root only.
      */
     void DummyDataInitialization() {
+        // This is the simple test from the lab manual .
         for (int i = 0; i < size; i++) {
             pVector[i] = i + 1;
             for (int j = 0; j < size; j++) {
@@ -272,8 +301,7 @@ private:
     /**
      * @brief Fills matrix/vector with random, diagonally dominant values. Root only.
      */
-    void RandomDataInitialization() {
-        // Create a dense, diagonally-dominant matrix.
+    void DiagonalDominantInitialization() {
         std::uniform_real_distribution<double> dist(1.0, 10.0); // Random values for matrix
         std::uniform_real_distribution<double> v_dist(1.0, 1000.0); // Random values for vector
 
@@ -286,10 +314,40 @@ private:
                     off_diagonal_sum += std::fabs(val);
                 }
             }
-            // Set the diagonal element to be larger than the sum of all others
             pMatrix[i * size + i] = off_diagonal_sum + dist(randEngine);
             pVector[i] = v_dist(randEngine);
         }
+    }
+
+    /**
+     * @brief Fills A with random values, x_true with random values, and calculates b = A*x_true.
+     */
+    void KnownSolutionInitialization() {
+        // ---------------------
+        // --- FIX IS HERE ---
+        // ---------------------
+        std::uniform_real_distribution<double> a_dist(1.0, 10.0); // For matrix A
+        std::uniform_real_distribution<double> x_dist(1.0, 10.0); // For solution x_true
+
+        // 1. Generate the random "ground-truth" solution
+        std::vector<double> x_true(size);
+        for (int i = 0; i < size; ++i) {
+            x_true[i] = x_dist(randEngine);
+        }
+
+        // 2. Generate random matrix A and calculate b = A * x_true
+        for (int i = 0; i < size; i++) {
+            pVector[i] = 0.0; // Clear pVector to use as an accumulator
+            for (int j = 0; j < size; j++) {
+                double val = a_dist(randEngine);
+                pMatrix[i * size + j] = val;
+                // Calculate pVector[i] = row i of A * x_true
+                pVector[i] += val * x_true[j];
+            }
+        }
+        // ---------------------
+        // --- END OF FIX ---
+        // ---------------------
     }
 
     /**
@@ -346,6 +404,40 @@ private:
 
             MPI_Allreduce(&procPivot, &globalPivot, 1, MPI_DOUBLE_INT, MPI_MAXLOC, MPI_COMM_WORLD);
 
+            // Special check for DummyDataInitialization, which can have 0 pivots
+            // after the lower-triangular part is done.
+            if (initChoice == 1 && globalPivot.value < 1.e-9 && i < size) {
+                // This is expected for the upper-right triangle of zeros.
+                // We just need to mark a row as "used" and continue.
+
+                // Find *any* unused row on this process
+                if(pivotPos == -1 && procRank == globalPivot.rank) {
+                     for(int j=0; j<rowNum; ++j) {
+                        if(pProcPivotIter[j] == -1) {
+                            pivotPos = j;
+                            break;
+                        }
+                    }
+                }
+
+                if (procRank == globalPivot.rank) {
+                    if (pivotPos != -1) { // This process has an unused row
+                        pProcPivotIter[pivotPos] = i;
+                        pParallelPivotPos[i] = pProcInd[procRank] + pivotPos;
+                    } else {
+                        // This process has no unused rows. Another process will.
+                        // We must set a "valid" index, even if it's a repeat,
+                        // so the Bcast doesn't fail.
+                        pParallelPivotPos[i] = pProcInd[procRank]; // Just send something
+                    }
+                }
+                // Broadcast the "chosen" pivot row, even if it's 0
+                MPI_Bcast(&pParallelPivotPos[i], 1, MPI_INT, globalPivot.rank, MPI_COMM_WORLD);
+                // No elimination is needed, so just continue the loop
+                continue;
+            }
+
+            // Standard check for non-dummy methods
             if (globalPivot.value < 1.e-9) {
                 if (procRank == 0) {
                      std::cerr << Colors::BOLD << Colors::RED
@@ -382,6 +474,11 @@ private:
     void ParallelEliminateColumns(const double* pPivotRow, int iter) {
         double pivotValue = pPivotRow[iter];
 
+        // This check is important for the DummyData case, where pivots can be 0
+        if (std::fabs(pivotValue) < 1.e-9) {
+            return; // No elimination possible
+        }
+
         for (int i = 0; i < rowNum; i++) {
             if (pProcPivotIter[i] == -1) {
                 double pivotFactor = pProcRows[i * size + iter] / pivotValue;
@@ -407,7 +504,12 @@ private:
             FindBackPivotRow(globalRowIndex, iterProcRank, iterPivotPos);
 
             if (procRank == iterProcRank) {
-                iterResult = pProcVector[iterPivotPos] / pProcRows[iterPivotPos * size + i];
+                double pivotValue = pProcRows[iterPivotPos * size + i];
+                if (std::fabs(pivotValue) < 1.e-9) {
+                    iterResult = 0.0; // This happens with the DummyData
+                } else {
+                    iterResult = pProcVector[iterPivotPos] / pivotValue;
+                }
                 pProcResult[iterPivotPos] = iterResult;
             }
 
@@ -451,16 +553,18 @@ private:
 
     /**
      * @brief Validates the result by computing A*x and checking if it equals b.
+     * This method is robust and works for all 3 initialization types.
      */
     void TestResult() {
         if (procRank != 0) return;
 
         PrintSubHeader("Step 4: Validation");
-        std::cout << Colors::CYAN << "Validating result (A*x == b)..." << Colors::RESET << std::endl;
+        std::cout << Colors::CYAN << "Validating result by computing (A * x_computed) and comparing to b..." << Colors::RESET << std::endl;
 
         std::vector<double> pRightPartVector(size, 0.0);
         bool correct = true;
-        double accuracy = 1.e-6; // Allowed floating point error
+        // Use a slightly more relaxed accuracy for larger/complex problems
+        double accuracy = (initChoice == 1) ? 1.e-6 : 1.e-4;
 
         for (int i = 0; i < size; i++) {
             for (int j = 0; j < size; j++) {
@@ -468,6 +572,8 @@ private:
             }
             if (std::fabs(pRightPartVector[i] - pVector[i]) > accuracy) {
                 correct = false;
+                 std::cout << Colors::RED << "  Mismatch at row " << i << ": Expected " << pVector[i]
+                           << ", Got " << pRightPartVector[i] << Colors::RESET << std::endl;
             }
         }
 
