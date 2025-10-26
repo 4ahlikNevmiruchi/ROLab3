@@ -199,6 +199,7 @@ public:
             }
 
             std::cout << Colors::BOLD << "\nTime of execution: " << Colors::CYAN
+                      << std::fixed << std::setprecision(6)
                       << duration.count() << " seconds" << Colors::RESET << std::endl;
 
             // --- Step 4: Validation (Optional) ---
