@@ -182,19 +182,19 @@ public class ParallelGauss {
 
          */
 
-        // --- Calculate row distribution (Simple Block Distribution) ---
-        // This is the standard, simple way to distribute rows.
         pProcNum = new int[procNum]; // Number of rows for each process
         pProcInd = new int[procNum]; // Starting row index for each process
 
-        int rowNumSimple = size / procNum;
-        int restRows = size % procNum;
-        int pProcIndOffset = 0;
+        int restRows = size;
+        pProcInd[0] = 0;
 
         for (int i = 0; i < procNum; i++) {
-            pProcNum[i] = (i < restRows) ? (rowNumSimple + 1) : rowNumSimple;
-            pProcInd[i] = pProcIndOffset;
-            pProcIndOffset += pProcNum[i];
+            pProcNum[i] = restRows / (procNum - i);
+            restRows -= pProcNum[i];
+
+            if (i > 0) {
+                pProcInd[i] = pProcInd[i - 1] + pProcNum[i - 1];
+            }
         }
 
         this.rowNum = pProcNum[procRank]; // This process's number of rows
@@ -240,14 +240,10 @@ public class ParallelGauss {
         }
 
         // --- 1. Calculate distribution for MATRIX (in elements) ---
-        // We use pProcNum/pProcInd (calculated in Init) which are row-based,
-        // and convert them to element-based counts/displacements for the matrix.
         int[] pSendNum = new int[procNum];
         int[] pSendInd = new int[procNum];
-
         for (int i = 0; i < procNum; i++) {
-            // THIS IS THE FIX: pProcNum[i] (rows) * size (columns)
-            pSendNum[i] = pProcNum[i] * size;
+            pSendNum[i] = pProcNum[i] * size; // Correctly multiply by size
             pSendInd[i] = pProcInd[i] * size;
         }
 
@@ -281,6 +277,9 @@ public class ParallelGauss {
      * C: ParallelResultCalculation
      */
     public void parallelResultCalculation() throws MPIException {
+        if (procRank != 0) {
+            pResult = new double[0];
+        }
         parallelGaussianElimination();
         parallelBackSubstitution();
     }
@@ -358,6 +357,8 @@ public class ParallelGauss {
             // --- 6. Parallel column elimination ---
             parallelEliminateColumns(iter);
         }
+
+        this.successfulIterations = iter;
     }
 
     /**
@@ -382,7 +383,7 @@ public class ParallelGauss {
     public void parallelBackSubstitution() throws MPIException {
         double[] iterResultBuf = new double[1]; // Buffer for broadcasting x[i]
 
-        for (int i = size - 1; i >= 0; i--) {
+        for (int i = successfulIterations - 1; i >= 0; i--) {
             // --- 1. Find which process holds the pivot row for variable 'i' ---
             int[] pivotInfo = findBackPivotRow(pParallelPivotPos[i]);
             int iterProcRank = pivotInfo[0]; // Rank of process
