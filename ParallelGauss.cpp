@@ -19,14 +19,60 @@ struct Colors {
     static const char* GREEN;
     static const char* YELLOW;
     static const char* CYAN;
+    static const char* MAGENTA;
     static const char* BOLD;
+    static const char* WHITE_BOLD;
 };
 const char* Colors::RESET = "\033[0m";
 const char* Colors::RED = "\033[31m";
 const char* Colors::GREEN = "\033[32m";
 const char* Colors::YELLOW = "\033[33m";
 const char* Colors::CYAN = "\033[36m";
+const char* Colors::MAGENTA = "\033[35m";
 const char* Colors::BOLD = "\033[1m";
+const char* Colors::WHITE_BOLD = "\033[1;37m";
+
+// --- Fancy UI Helper Functions ---
+
+/**
+ * @brief Prints a "mega fancy" boxed header.
+ */
+void PrintHeader(const std::string& title) {
+    std::cout << "\n" << Colors::WHITE_BOLD;
+    std::cout << "╔";
+    for (int i = 0; i < title.length() + 4; ++i) std::cout << "═";
+    std::cout << "╗\n";
+    std::cout << "║  " << Colors::CYAN << Colors::BOLD << title << Colors::WHITE_BOLD << "  ║\n";
+    std::cout << "╚";
+    for (int i = 0; i < title.length() + 4; ++i) std::cout << "═";
+    std::cout << "╝" << Colors::RESET << std::endl;
+}
+
+/**
+ * @brief Prints a formatted sub-header for steps.
+ */
+void PrintSubHeader(const std::string& title) {
+    std::cout << "\n" << Colors::MAGENTA << Colors::BOLD << "--- " << title << " ---" << Colors::RESET << std::endl;
+}
+
+/**
+ * @brief Prints the initial Matrix A and Vector b side-by-side.
+ * Only called if size <= 20.
+ */
+void PrintMatrixVector(const std::vector<double>& matrix, const std::vector<double>& vec, int n) {
+    PrintSubHeader("Initial System (A|b)");
+    std::cout << std::fixed << std::setprecision(4);
+    for (int i = 0; i < n; ++i) {
+        std::cout << Colors::CYAN << "║ "; // Start of row
+        // Print matrix row
+        for (int j = 0; j < n; ++j) {
+            std::cout << std::setw(10) << matrix[i * n + j];
+        }
+        std::cout << Colors::CYAN << " ║ " << Colors::YELLOW << std::setw(10) << vec[i]
+                  << Colors::CYAN << " ║" << Colors::RESET << "\n";
+    }
+}
+
 
 /**
  * @class ParallelGauss
@@ -83,49 +129,75 @@ public:
      * @brief Main function to orchestrate the entire solution process.
      */
     void Run() {
-        ProcessInitialization(); // Get size, bcast, and resize all vectors
+        // --- Step 1: Initialization ---
+        if (procRank == 0) PrintSubHeader("Step 1: Initialization");
+        ProcessInitialization(); // Gets size
 
         if (procRank == 0) {
-            std::cout << Colors::CYAN << "Initializing matrix and vector..." << Colors::RESET << std::endl;
+            std::cout << "Initializing matrix and vector for size "
+                      << Colors::YELLOW << size << "x" << size << Colors::RESET << "..." << std::endl;
 
             // Choose one initialization method:
 
-            // Use this for simple validation (result is all 1s)
+            // Use this for simple validation (result is all 1s from the lab manual)
             // DummyDataInitialization();
 
-            // Use this for performance testing (NOW FIXED)
+            // Use this for performance testing (diagonally dominant)
             RandomDataInitialization();
+
+            // *** USER REQUEST: Print initial matrix if N <= 20 ***
+            if (size <= 20) {
+                PrintMatrixVector(pMatrix, pVector, size);
+            } else {
+                std::cout << Colors::CYAN << "(Matrix is " << size << "x" << size
+                          << ", too large to display)" << Colors::RESET << std::endl;
+            }
         }
 
-        // --- Start Timer ---
+        // --- Step 2: Parallel Computation ---
+        if (procRank == 0) PrintSubHeader("Step 2: Parallel Computation");
+
+        if (procRank == 0) std::cout << "  - Distributing data..." << std::endl;
         auto start = std::chrono::high_resolution_clock::now();
-
         DataDistribution();
-        ParallelGaussianElimination();
-        ParallelBackSubstitution();
-        ResultCollection();
 
-        // --- Stop Timer ---
+        if (procRank == 0) std::cout << "  - Performing Gaussian elimination..." << std::endl;
+        ParallelGaussianElimination();
+
+        if (procRank == 0) std::cout << "  - Performing back substitution..." << std::endl;
+        ParallelBackSubstitution();
+
+        if (procRank == 0) std::cout << "  - Collecting results..." << std::endl;
+        ResultCollection();
         auto end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> duration = end - start;
 
-        // --- Output Results ---
+        // --- Step 3: Results ---
         if (procRank == 0) {
-            std::cout << Colors::BOLD << Colors::GREEN << "\nParallel computation finished." << Colors::RESET << std::endl;
-            std::cout << Colors::BOLD << "Result Vector (x_0, x_1, ...):" << Colors::RESET << std::endl;
-            PrintResultVector(pResult);
+            PrintSubHeader("Step 3: Results");
 
-            std::cout << Colors::BOLD << "\n\nTime of execution: " << Colors::CYAN
+            // *** USER REQUEST: Print result vector if N <= 100 ***
+            if (size <= 100) {
+                std::cout << Colors::BOLD << "Result Vector (x_0, x_1, ...):" << Colors::RESET << std::endl;
+                PrintResultVector(pResult);
+            } else {
+                std::cout << Colors::BOLD << "Result Vector:" << Colors::RESET << std::endl;
+                std::cout << Colors::CYAN << "(Vector is " << size
+                          << " elements long, too large to display)" << Colors::RESET << std::endl;
+            }
+
+            std::cout << Colors::BOLD << "\nTime of execution: " << Colors::CYAN
                       << duration.count() << " seconds" << Colors::RESET << std::endl;
 
-            // User prompt to test the result
+            // --- Step 4: Validation (Optional) ---
             char choice = 'n';
-            std::cout << Colors::YELLOW << "\nDo you want to validate the result (A*x = b)? (y/n): \n" << Colors::RESET;
+            std::cout << Colors::BOLD << Colors::YELLOW << "\nDo you want to validate the result (A*x = b)? (y/n): \n" << Colors::RESET;
             std::cin >> choice;
 
             if (choice == 'y' || choice == 'Y') {
                 TestResult();
             } else {
+                PrintSubHeader("Step 4: Validation");
                 std::cout << Colors::CYAN << "Skipping result validation." << Colors::RESET << std::endl;
             }
         }
@@ -138,7 +210,7 @@ private:
     void ProcessInitialization() {
         if (procRank == 0) {
             do {
-                std::cout << Colors::YELLOW << "\nEnter the size of the (NxN) matrix (N): \n" << Colors::RESET;
+                std::cout << Colors::BOLD << Colors::YELLOW << "\nEnter the size of the (NxN) matrix (N): \n" << Colors::RESET;
                 std::cin >> size;
                 if (std::cin.fail()) {
                     std::cin.clear();
@@ -156,12 +228,9 @@ private:
         MPI_Bcast(&size, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
         // --- All Processes: Calculate row distribution and resize vectors ---
-
-        // Resize distribution helpers
         pProcInd.resize(procNum);
         pProcNum.resize(procNum);
 
-        // Calculate workload distribution (handles non-divisible sizes)
         int restRows = size;
         pProcInd[0] = 0;
         pProcNum[0] = size / procNum;
@@ -175,16 +244,12 @@ private:
 
         rowNum = pProcNum[procRank]; // Store this process's row count
 
-        // Resize process-local vectors
         pProcRows.resize(rowNum * size);
         pProcVector.resize(rowNum);
         pProcResult.resize(rowNum);
-
-        // Resize algorithm state vectors
         pParallelPivotPos.resize(size);
         pProcPivotIter.resize(rowNum, -1); // Initialize all to -1 (not pivoted)
 
-        // Resize root-only vectors
         if (procRank == 0) {
             pMatrix.resize(size * size);
             pVector.resize(size);
@@ -208,11 +273,7 @@ private:
      * @brief Fills matrix/vector with random, diagonally dominant values. Root only.
      */
     void RandomDataInitialization() {
-        // ---------------------
-        // --- FIX IS HERE ---
-        // ---------------------
         // Create a dense, diagonally-dominant matrix.
-        // This is non-singular and numerically stable for pivoting.
         std::uniform_real_distribution<double> dist(1.0, 10.0); // Random values for matrix
         std::uniform_real_distribution<double> v_dist(1.0, 1000.0); // Random values for vector
 
@@ -226,23 +287,15 @@ private:
                 }
             }
             // Set the diagonal element to be larger than the sum of all others
-            // This guarantees the matrix is non-singular.
-            pMatrix[i * size + i] = off_diagonal_sum + dist(randEngine); // Add another random val
-
-            // Fill the vector
+            pMatrix[i * size + i] = off_diagonal_sum + dist(randEngine);
             pVector[i] = v_dist(randEngine);
         }
-        // ---------------------
-        // --- END OF FIX ---
-        // ---------------------
     }
 
     /**
      * @brief Distributes pMatrix and pVector from root to all processes.
      */
     void DataDistribution() {
-        // --- Scatter Matrix A ---
-        // We need temporary send/index counts *for matrix elements*
         std::vector<int> pSendNum(procNum);
         std::vector<int> pSendInd(procNum);
 
@@ -252,29 +305,15 @@ private:
         }
 
         MPI_Scatterv(
-            pMatrix.data(),    // Send buffer (root only)
-            pSendNum.data(),   // Send counts for each process
-            pSendInd.data(),   // Displacements for each process
-            MPI_DOUBLE,
-            pProcRows.data(),  // Receive buffer
-            pSendNum[procRank],// Receive count for this process
-            MPI_DOUBLE,
-            0,                 // Root process
-            MPI_COMM_WORLD
+            pMatrix.data(), pSendNum.data(), pSendInd.data(), MPI_DOUBLE,
+            pProcRows.data(), pSendNum[procRank], MPI_DOUBLE,
+            0, MPI_COMM_WORLD
         );
 
-        // --- Scatter Vector b ---
-        // We can reuse pProcNum and pProcInd directly
         MPI_Scatterv(
-            pVector.data(),    // Send buffer (root only)
-            pProcNum.data(),   // Send counts (num_rows for each)
-            pProcInd.data(),   // Displacements (start_row for each)
-            MPI_DOUBLE,
-            pProcVector.data(),// Receive buffer
-            pProcNum[procRank],// Receive count
-            MPI_DOUBLE,
-            0,                 // Root
-            MPI_COMM_WORLD
+            pVector.data(), pProcNum.data(), pProcInd.data(), MPI_DOUBLE,
+            pProcVector.data(), pProcNum[procRank], MPI_DOUBLE,
+            0, MPI_COMM_WORLD
         );
     }
 
@@ -282,28 +321,22 @@ private:
      * @brief Performs parallel forward elimination (Gaussian elimination).
      */
     void ParallelGaussianElimination() {
-        // This vector holds the pivot row + pivot b-value for broadcasting
         std::vector<double> pPivotRow(size + 1);
-
-        // Struct for MPI_MAXLOC: finds max value and rank of process that has it
         struct {
             double value;
             int rank;
         } procPivot, globalPivot;
 
-        // Iterate through each column to eliminate it
         for (int i = 0; i < size; i++) {
-
-            // 1. Find local pivot row
             double maxVal = -1.0;
             int pivotPos = -1;
 
             for (int j = 0; j < rowNum; j++) {
-                if (pProcPivotIter[j] == -1) { // If this row hasn't been a pivot yet
+                if (pProcPivotIter[j] == -1) {
                     double absVal = std::fabs(pProcRows[j * size + i]);
                     if (absVal > maxVal) {
                         maxVal = absVal;
-                        pivotPos = j; // Local index of the pivot row
+                        pivotPos = j;
                     }
                 }
             }
@@ -311,17 +344,8 @@ private:
             procPivot.value = maxVal;
             procPivot.rank = procRank;
 
-            // 2. Find global pivot row
-            MPI_Allreduce(
-                &procPivot,     // Send buffer
-                &globalPivot,   // Receive buffer
-                1,              // Count
-                MPI_DOUBLE_INT, // Custom MPI datatype
-                MPI_MAXLOC,     // Operation
-                MPI_COMM_WORLD
-            );
+            MPI_Allreduce(&procPivot, &globalPivot, 1, MPI_DOUBLE_INT, MPI_MAXLOC, MPI_COMM_WORLD);
 
-            // 3. Check for singular matrix
             if (globalPivot.value < 1.e-9) {
                 if (procRank == 0) {
                      std::cerr << Colors::BOLD << Colors::RED
@@ -329,43 +353,25 @@ private:
                                << " Pivot value is " << globalPivot.value
                                << " at iteration " << i << Colors::RESET << std::endl;
                 }
-                MPI_Abort(MPI_COMM_WORLD, 1); // Stop all processes
+                MPI_Abort(MPI_COMM_WORLD, 1);
             }
 
-
-            // 4. Store pivot information
             if (procRank == globalPivot.rank) {
-                pProcPivotIter[pivotPos] = i; // Mark local row as used in iter i
-                pParallelPivotPos[i] = pProcInd[procRank] + pivotPos; // Store global row index
+                pProcPivotIter[pivotPos] = i;
+                pParallelPivotPos[i] = pProcInd[procRank] + pivotPos;
             }
 
-            // 5. Broadcast the global pivot row index to all processes
-            MPI_Bcast(
-                &pParallelPivotPos[i],
-                1,
-                MPI_INT,
-                globalPivot.rank,
-                MPI_COMM_WORLD
-            );
+            MPI_Bcast(&pParallelPivotPos[i], 1, MPI_INT, globalPivot.rank, MPI_COMM_WORLD);
 
-            // 6. Broadcast the pivot row data
             if (procRank == globalPivot.rank) {
-                // Fill the broadcast buffer
                 for (int j = 0; j < size; j++) {
                     pPivotRow[j] = pProcRows[pivotPos * size + j];
                 }
-                pPivotRow[size] = pProcVector[pivotPos]; // Append the b-value
+                pPivotRow[size] = pProcVector[pivotPos];
             }
 
-            MPI_Bcast(
-                pPivotRow.data(),
-                size + 1,
-                MPI_DOUBLE,
-                globalPivot.rank,
-                MPI_COMM_WORLD
-            );
+            MPI_Bcast(pPivotRow.data(), size + 1, MPI_DOUBLE, globalPivot.rank, MPI_COMM_WORLD);
 
-            // 7. Perform column elimination on all local rows
             ParallelEliminateColumns(pPivotRow.data(), i);
         }
     }
@@ -377,13 +383,13 @@ private:
         double pivotValue = pPivotRow[iter];
 
         for (int i = 0; i < rowNum; i++) {
-            if (pProcPivotIter[i] == -1) { // If not a pivot row
+            if (pProcPivotIter[i] == -1) {
                 double pivotFactor = pProcRows[i * size + iter] / pivotValue;
 
                 for (int j = iter; j < size; j++) {
                     pProcRows[i * size + j] -= pivotFactor * pPivotRow[j];
                 }
-                pProcVector[i] -= pivotFactor * pPivotRow[size]; // Update b-vector part
+                pProcVector[i] -= pivotFactor * pPivotRow[size];
             }
         }
     }
@@ -392,36 +398,23 @@ private:
      * @brief Performs parallel back substitution.
      */
     void ParallelBackSubstitution() {
-        double iterResult; // The calculated value for x_i
-
-        // Iterate backwards from the last unknown
+        double iterResult;
         for (int i = size - 1; i >= 0; i--) {
-
-            // 1. Find which process has the pivot row for this iteration
             int globalRowIndex = pParallelPivotPos[i];
-            int iterProcRank = -1; // Rank of process holding the pivot row
-            int iterPivotPos = -1; // Local index of pivot row on that process
+            int iterProcRank = -1;
+            int iterPivotPos = -1;
 
             FindBackPivotRow(globalRowIndex, iterProcRank, iterPivotPos);
 
-            // 2. The process with the pivot row calculates the result for x_i
             if (procRank == iterProcRank) {
                 iterResult = pProcVector[iterPivotPos] / pProcRows[iterPivotPos * size + i];
                 pProcResult[iterPivotPos] = iterResult;
             }
 
-            // 3. Broadcast the result x_i to all processes
-            MPI_Bcast(
-                &iterResult,
-                1,
-                MPI_DOUBLE,
-                iterProcRank,
-                MPI_COMM_WORLD
-            );
+            MPI_Bcast(&iterResult, 1, MPI_DOUBLE, iterProcRank, MPI_COMM_WORLD);
 
-            // 4. Update the right-hand side (vector b) for all remaining rows
             for (int j = 0; j < rowNum; j++) {
-                if (pProcPivotIter[j] < i) { // If this row solves for an earlier unknown
+                if (pProcPivotIter[j] < i) {
                     double val = pProcRows[j * size + i] * iterResult;
                     pProcVector[j] -= val;
                 }
@@ -440,7 +433,7 @@ private:
             }
         }
         if (iterProcRank == -1) {
-            iterProcRank = procNum - 1; // It must be on the last process
+            iterProcRank = procNum - 1;
         }
         iterPivotPos = rowIndex - pProcInd[iterProcRank];
     }
@@ -450,15 +443,9 @@ private:
      */
     void ResultCollection() {
         MPI_Gatherv(
-            pProcResult.data(), // Send buffer
-            pProcNum[procRank], // Send count for this process
-            MPI_DOUBLE,
-            pResult.data(),     // Receive buffer (root only)
-            pProcNum.data(),    // Receive counts from all
-            pProcInd.data(),    // Displacements from all
-            MPI_DOUBLE,
-            0,                  // Root
-            MPI_COMM_WORLD
+            pProcResult.data(), pProcNum[procRank], MPI_DOUBLE,
+            pResult.data(), pProcNum.data(), pProcInd.data(), MPI_DOUBLE,
+            0, MPI_COMM_WORLD
         );
     }
 
@@ -466,10 +453,10 @@ private:
      * @brief Validates the result by computing A*x and checking if it equals b.
      */
     void TestResult() {
-        // This function only runs on the root process
         if (procRank != 0) return;
 
-        std::cout << Colors::CYAN << "Validating result..." << Colors::RESET << std::endl;
+        PrintSubHeader("Step 4: Validation");
+        std::cout << Colors::CYAN << "Validating result (A*x == b)..." << Colors::RESET << std::endl;
 
         std::vector<double> pRightPartVector(size, 0.0);
         bool correct = true;
@@ -477,12 +464,8 @@ private:
 
         for (int i = 0; i < size; i++) {
             for (int j = 0; j < size; j++) {
-                // A[i][j] * x[j]
-                // We must use pParallelPivotPos to get the correct x_j
                 pRightPartVector[i] += pMatrix[i * size + j] * pResult[pParallelPivotPos[j]];
             }
-
-            // Check if (A*x)[i] is close to b[i]
             if (std::fabs(pRightPartVector[i] - pVector[i]) > accuracy) {
                 correct = false;
             }
@@ -490,39 +473,23 @@ private:
 
         if (correct) {
             std::cout << Colors::BOLD << Colors::GREEN
-                      << "The result of the parallel Gauss algorithm is correct."
+                      << "VALIDATION SUCCESSFUL: The result is correct."
                       << Colors::RESET << std::endl;
         } else {
             std::cout << Colors::BOLD << Colors::RED
-                      << "The result of the parallel Gauss algorithm is NOT correct. Check your code."
+                      << "VALIDATION FAILED: The result is NOT correct."
                       << Colors::RESET << std::endl;
         }
     }
 
     /**
-     * @brief Prints a vector with nice formatting.
-     */
-    void PrintVector(const std::vector<double>& vec) {
-        std::cout << std::fixed << std::setprecision(4);
-        for (size_t i = 0; i < vec.size(); ++i) {
-            std::cout << std::setw(10) << vec[i];
-            if ((i + 1) % 8 == 0 || i == vec.size() - 1) {
-                std::cout << "\n";
-            } else {
-                std::cout << " ";
-            }
-        }
-        std::cout << Colors::RESET;
-    }
-
-    /**
-     * @brief Prints the result vector, re-ordering it correctly using the pivot map.
+     * @brief Prints the final result vector, re-ordering it correctly.
      */
     void PrintResultVector(const std::vector<double>& result) {
         std::cout << std::fixed << std::setprecision(4);
         for (int i = 0; i < size; ++i) {
             // Print x_i, which is stored in result[pParallelPivotPos[i]]
-            std::cout << std::setw(10) << result[pParallelPivotPos[i]];
+            std::cout << Colors::YELLOW << std::setw(10) << result[pParallelPivotPos[i]];
             if ((i + 1) % 8 == 0 || i == size - 1) {
                 std::cout << "\n";
             } else {
@@ -545,9 +512,7 @@ int main(int argc, char* argv[]) {
     MPI_Comm_size(MPI_COMM_WORLD, &procNum);
 
     if (procRank == 0) {
-        std::cout << Colors::BOLD << Colors::CYAN
-                  << "Parallel Gauss Algorithm for Solving Linear Systems"
-                  << Colors::RESET << std::endl;
+        PrintHeader("Parallel Gauss Algorithm Solver");
         std::cout << "Running on " << Colors::YELLOW << procNum << " processes."
                   << Colors::RESET << std::endl;
     }
