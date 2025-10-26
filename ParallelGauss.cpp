@@ -32,10 +32,10 @@ const char* Colors::MAGENTA = "\033[35m";
 const char* Colors::BOLD = "\033[1m";
 const char* Colors::WHITE_BOLD = "\033[1;37m";
 
-// --- Fancy UI Helper Functions ---
+// --- UI Helper Functions ---
 
 /**
- * @brief Prints a "mega fancy" boxed header.
+ * @brief Prints boxed header.
  */
 void PrintHeader(const std::string& title) {
     std::cout << "\n" << Colors::WHITE_BOLD;
@@ -157,7 +157,7 @@ public:
                       << " using " << Colors::CYAN << choiceName << Colors::RESET
                       << " method..." << std::endl;
 
-            // *** USER REQUEST: Print initial matrix if N <= 20 ***
+            // Print initial matrix if N <= 20 ***
             if (size <= 20) {
                 PrintMatrixVector(pMatrix, pVector, size);
             } else {
@@ -188,7 +188,7 @@ public:
         if (procRank == 0) {
             PrintSubHeader("Step 3: Results");
 
-            // *** USER REQUEST: Print result vector if N <= 100 ***
+            // Print result vector if N <= 100 ***
             if (size <= 100) {
                 std::cout << Colors::BOLD << "Result Vector (x_0, x_1, ...):" << Colors::RESET << std::endl;
                 PrintResultVector(pResult);
@@ -235,7 +235,7 @@ private:
                 }
             } while (size < procNum);
 
-            // *** USER REQUEST: Prompt for initialization method ***
+            // Prompt for initialization method
             do {
                 std::cout << Colors::BOLD << Colors::YELLOW << "\nChoose initialization method:" << Colors::RESET << std::endl;
                 std::cout << "  (1) " << Colors::CYAN << "Dummy Data" << Colors::RESET << " (Simple, non-random test)" << std::endl;

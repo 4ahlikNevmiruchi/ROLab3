@@ -38,3 +38,4 @@ build/
 ### Mac OS ###
 .DS_Store
 /parallel_gauss
+/serial_gauss
