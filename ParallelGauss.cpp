@@ -9,9 +9,6 @@
 #include <stdexcept> // For exceptions
 #include <mpi.h>
 
-// mpic++ -o parallel_gauss ParallelGauss.cpp -std=c++17 -O3
-// mpirun -n 4 ./parallel_gauss
-
 /**
  * @struct Colors
  * @brief Holds ANSI escape codes for colorful terminal output.
@@ -32,10 +29,10 @@ const char* Colors::CYAN = "\033[36m";
 const char* Colors::BOLD = "\033[1m";
 
 /**
- * @class GaussSolver
+ * @class ParallelGauss
  * @brief Encapsulates the state and logic for the parallel Gauss elimination.
  */
-class GaussSolver {
+class ParallelGauss {
 private:
     // MPI state
     int procRank;
@@ -71,7 +68,7 @@ public:
     /**
      * @brief Constructor: Initializes MPI state and seeds the random generator.
      */
-    GaussSolver(int rank, int num) : procRank(rank), procNum(num), size(0), rowNum(0) {
+    ParallelGauss(int rank, int num) : procRank(rank), procNum(num), size(0), rowNum(0) {
         // Seed the random engine uniquely for each process
         auto seed = std::chrono::high_resolution_clock::now().time_since_epoch().count() + procRank;
         randEngine.seed(seed);
@@ -90,9 +87,14 @@ public:
 
         if (procRank == 0) {
             std::cout << Colors::CYAN << "Initializing matrix and vector..." << Colors::RESET << std::endl;
-            // Choose one:
-            //DummyDataInitialization(); // For simple validation (result is all 1s)
-            RandomDataInitialization(); // For performance testing
+
+            // Choose one initialization method:
+
+            // Use this for simple validation (result is all 1s)
+            // DummyDataInitialization();
+
+            // Use this for performance testing (NOW FIXED)
+            RandomDataInitialization();
         }
 
         // --- Start Timer ---
@@ -115,7 +117,7 @@ public:
 
             std::cout << Colors::BOLD << "\n\nTime of execution: " << Colors::CYAN
                       << duration.count() << " seconds" << Colors::RESET << std::endl;
-            
+
             // User prompt to test the result
             char choice = 'n';
             std::cout << Colors::YELLOW << "\nDo you want to validate the result (A*x = b)? (y/n): \n" << Colors::RESET;
@@ -203,17 +205,36 @@ private:
     }
 
     /**
-     * @brief Fills matrix/vector with random values. Root only.
+     * @brief Fills matrix/vector with random, diagonally dominant values. Root only.
      */
     void RandomDataInitialization() {
-        std::uniform_real_distribution<double> dist(1.0, 1000.0);
+        // ---------------------
+        // --- FIX IS HERE ---
+        // ---------------------
+        // Create a dense, diagonally-dominant matrix.
+        // This is non-singular and numerically stable for pivoting.
+        std::uniform_real_distribution<double> dist(1.0, 10.0); // Random values for matrix
+        std::uniform_real_distribution<double> v_dist(1.0, 1000.0); // Random values for vector
+
         for (int i = 0; i < size; i++) {
-            pVector[i] = dist(randEngine);
+            double off_diagonal_sum = 0.0;
             for (int j = 0; j < size; j++) {
-                // Generate a non-degenerate lower-triangular matrix
-                pMatrix[i * size + j] = (j <= i) ? dist(randEngine) : 0.0;
+                if (i != j) {
+                    double val = dist(randEngine);
+                    pMatrix[i * size + j] = val;
+                    off_diagonal_sum += std::fabs(val);
+                }
             }
+            // Set the diagonal element to be larger than the sum of all others
+            // This guarantees the matrix is non-singular.
+            pMatrix[i * size + i] = off_diagonal_sum + dist(randEngine); // Add another random val
+
+            // Fill the vector
+            pVector[i] = v_dist(randEngine);
         }
+        // ---------------------
+        // --- END OF FIX ---
+        // ---------------------
     }
 
     /**
@@ -272,8 +293,9 @@ private:
 
         // Iterate through each column to eliminate it
         for (int i = 0; i < size; i++) {
+
             // 1. Find local pivot row
-            double maxVal = 0.0;
+            double maxVal = -1.0;
             int pivotPos = -1;
 
             for (int j = 0; j < rowNum; j++) {
@@ -285,6 +307,7 @@ private:
                     }
                 }
             }
+
             procPivot.value = maxVal;
             procPivot.rank = procRank;
 
@@ -298,14 +321,25 @@ private:
                 MPI_COMM_WORLD
             );
 
-            // 3. Store pivot information
+            // 3. Check for singular matrix
+            if (globalPivot.value < 1.e-9) {
+                if (procRank == 0) {
+                     std::cerr << Colors::BOLD << Colors::RED
+                               << "\nError: Matrix is singular or numerically unstable."
+                               << " Pivot value is " << globalPivot.value
+                               << " at iteration " << i << Colors::RESET << std::endl;
+                }
+                MPI_Abort(MPI_COMM_WORLD, 1); // Stop all processes
+            }
+
+
+            // 4. Store pivot information
             if (procRank == globalPivot.rank) {
                 pProcPivotIter[pivotPos] = i; // Mark local row as used in iter i
                 pParallelPivotPos[i] = pProcInd[procRank] + pivotPos; // Store global row index
             }
 
-            // 4. Broadcast the global pivot row index to all processes
-            // This ensures pParallelPivotPos is identical everywhere
+            // 5. Broadcast the global pivot row index to all processes
             MPI_Bcast(
                 &pParallelPivotPos[i],
                 1,
@@ -314,7 +348,7 @@ private:
                 MPI_COMM_WORLD
             );
 
-            // 5. Broadcast the pivot row data
+            // 6. Broadcast the pivot row data
             if (procRank == globalPivot.rank) {
                 // Fill the broadcast buffer
                 for (int j = 0; j < size; j++) {
@@ -331,7 +365,7 @@ private:
                 MPI_COMM_WORLD
             );
 
-            // 6. Perform column elimination on all local rows
+            // 7. Perform column elimination on all local rows
             ParallelEliminateColumns(pPivotRow.data(), i);
         }
     }
@@ -341,15 +375,11 @@ private:
      */
     void ParallelEliminateColumns(const double* pPivotRow, int iter) {
         double pivotValue = pPivotRow[iter];
-        if (std::fabs(pivotValue) < 1e-9) {
-             // This can happen with a singular matrix.
-             // For this lab, we assume non-singular, but robust code would handle this.
-        }
 
         for (int i = 0; i < rowNum; i++) {
             if (pProcPivotIter[i] == -1) { // If not a pivot row
                 double pivotFactor = pProcRows[i * size + iter] / pivotValue;
-                
+
                 for (int j = iter; j < size; j++) {
                     pProcRows[i * size + j] -= pivotFactor * pPivotRow[j];
                 }
@@ -366,7 +396,7 @@ private:
 
         // Iterate backwards from the last unknown
         for (int i = size - 1; i >= 0; i--) {
-            
+
             // 1. Find which process has the pivot row for this iteration
             int globalRowIndex = pParallelPivotPos[i];
             int iterProcRank = -1; // Rank of process holding the pivot row
@@ -459,12 +489,12 @@ private:
         }
 
         if (correct) {
-            std::cout << Colors::BOLD << Colors::GREEN 
-                      << "The result of the parallel Gauss algorithm is correct." 
+            std::cout << Colors::BOLD << Colors::GREEN
+                      << "The result of the parallel Gauss algorithm is correct."
                       << Colors::RESET << std::endl;
         } else {
-            std::cout << Colors::BOLD << Colors::RED 
-                      << "The result of the parallel Gauss algorithm is NOT correct. Check your code." 
+            std::cout << Colors::BOLD << Colors::RED
+                      << "The result of the parallel Gauss algorithm is NOT correct. Check your code."
                       << Colors::RESET << std::endl;
         }
     }
@@ -523,7 +553,7 @@ int main(int argc, char* argv[]) {
     }
 
     try {
-        GaussSolver solver(procRank, procNum);
+        ParallelGauss solver(procRank, procNum);
         solver.Run();
     } catch (const std::exception& e) {
         if (procRank == 0) {
